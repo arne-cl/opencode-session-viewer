@@ -260,7 +260,8 @@ def open_in_browser(output_path: Path) -> None:
             .then(r => r.json())
             .then(data => loadData(data))
             .catch(() => {});"""
-    inline = f"        loadData({data});"
+    safe_data = data.replace("<", "\\x3c").replace(">", "\\x3e")
+    inline = f"        loadData({safe_data});"
 
     if autoload not in html:
         print("Warning: could not find auto-load block in index.html, skipping browser open.", file=sys.stderr)

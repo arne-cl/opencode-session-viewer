@@ -867,6 +867,17 @@
             </div>
             
             <div class="viz-section">
+                <div class="viz-title">Cumulative Tokens Over Time</div>
+                <div class="sparkline-container">
+                    <svg class="sparkline-svg" id="cumulativeSparkline"></svg>
+                    <div class="sparkline-labels">
+                        <span>Start</span>
+                        <span>End</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="viz-section">
                 <div class="viz-title">Timeline Progress</div>
                 <div class="progress-bar-container">
                     <div class="progress-bar" id="progressBar" style="width: 0%"></div>
@@ -883,6 +894,7 @@
         let toolCounter = 0;
         let highlightedId = null;
         let tokenData = [];
+        let cumulativeTokenData = [];
         let maxTokens = { input: 1, output: 1, cache: 1 };
         let currentMessageIndex = 0;
         
@@ -947,6 +959,12 @@
         function buildTokenData() {
             if (!SESSION_DATA) return;
             tokenData = SESSION_DATA.messages.map(m => getMessageTokens(m));
+            cumulativeTokenData = [];
+            let cumSum = 0;
+            tokenData.forEach(t => {
+                cumSum += t.total;
+                cumulativeTokenData.push(cumSum);
+            });
             maxTokens = {
                 input: Math.max(1, ...tokenData.map(t => t.input)),
                 output: Math.max(1, ...tokenData.map(t => t.output)),
@@ -1047,6 +1065,7 @@
             
             // Update sparkline marker
             renderSparkline();
+            renderCumulativeSparkline();
         }
         
         // Render sparkline
@@ -1082,6 +1101,38 @@
                 <path class="sparkline-path" d="${pathD}"/>
                 <line class="sparkline-position-line" x1="${currentX}" y1="${padding.top}" x2="${currentX}" y2="${padding.top + chartHeight}"/>
                 <circle class="sparkline-marker" cx="${currentX}" cy="${currentY}" r="5"/>
+            `;
+        }
+        
+        function renderCumulativeSparkline() {
+            if (!SESSION_DATA || cumulativeTokenData.length === 0) return;
+            
+            const svg = document.getElementById('cumulativeSparkline');
+            const width = svg.clientWidth || 200;
+            const height = svg.clientHeight || 80;
+            const padding = { top: 10, right: 10, bottom: 10, left: 10 };
+            const chartWidth = width - padding.left - padding.right;
+            const chartHeight = height - padding.top - padding.bottom;
+            
+            const maxCum = Math.max(1, ...cumulativeTokenData);
+            
+            const points = cumulativeTokenData.map((v, i) => {
+                const x = padding.left + (i / (cumulativeTokenData.length - 1 || 1)) * chartWidth;
+                const y = padding.top + chartHeight - (v / maxCum) * chartHeight;
+                return { x, y };
+            });
+            
+            const pathD = points.map((p, i) => (i === 0 ? 'M' : 'L') + p.x + ',' + p.y).join(' ');
+            const areaD = pathD + ` L${points[points.length-1].x},${padding.top + chartHeight} L${padding.left},${padding.top + chartHeight} Z`;
+            
+            const currentX = padding.left + (currentMessageIndex / (cumulativeTokenData.length - 1 || 1)) * chartWidth;
+            const currentY = points[currentMessageIndex]?.y || padding.top + chartHeight;
+            
+            svg.innerHTML = `
+                <path d="${areaD}" style="fill: var(--accent-blue); opacity: 0.1;"/>
+                <path d="${pathD}" style="fill: none; stroke: var(--accent-blue); stroke-width: 1.5;"/>
+                <line x1="${currentX}" y1="${padding.top}" x2="${currentX}" y2="${padding.top + chartHeight}" style="stroke: var(--accent-blue); stroke-width: 1; stroke-dasharray: 2,2; opacity: 0.5;"/>
+                <circle cx="${currentX}" cy="${currentY}" r="5" style="fill: var(--accent-blue); stroke: var(--bg-primary); stroke-width: 2;"/>
             `;
         }
         
@@ -1177,7 +1228,7 @@
         }
         
         // Render part
-        function renderPart(part) {
+        function renderPart(part, cumulativeTotal) {
             if (part.type === 'text' && part.text) {
                 return `<div class="part"><div class="part-text">${esc(part.text)}</div></div>`;
             }
@@ -1227,7 +1278,7 @@
                         ${t.reasoning ? `<span class="token-badge">Reason: ${t.reasoning.toLocaleString()}</span>` : ''}
                         ${t.cache?.read ? `<span class="token-badge">Cache R: ${t.cache.read.toLocaleString()}</span>` : ''}
                         ${t.cache?.write ? `<span class="token-badge">Cache W: ${t.cache.write.toLocaleString()}</span>` : ''}
-                        ${t.total ? `<span class="token-badge">Total: ${t.total.toLocaleString()}</span>` : ''}
+                        ${cumulativeTotal ? `<span class="token-badge">Session Total: ${cumulativeTotal.toLocaleString()}</span>` : ''}
                         ${cost ? `<span class="token-badge">$${cost.toFixed(4)}</span>` : ''}
                     </div>
                 `;
@@ -1241,6 +1292,7 @@
             if (!SESSION_DATA) return;
             
             toolCounter = 0;
+            let cumulativeTokens = 0;
             const timeline = document.getElementById('timeline');
             timeline.innerHTML = SESSION_DATA.messages.map((m, i) => `
                 <div class="message ${m.role}" id="msg-${i}">
@@ -1255,7 +1307,12 @@
                         </div>
                     </div>
                     <div class="message-body">
-                        ${(m.parts || []).map(p => renderPart(p)).join('') || '<span style="color:var(--text-tertiary)">(no content)</span>'}
+                        ${(m.parts || []).map(p => {
+                            if (p.type === 'step-finish' && p.tokens) {
+                                cumulativeTokens += p.tokens.total || 0;
+                            }
+                            return renderPart(p, cumulativeTokens);
+                        }).join('') || '<span style="color:var(--text-tertiary)">(no content)</span>'}
                     </div>
                 </div>
             `).join('');
@@ -1380,6 +1437,7 @@
         // Resize handler for sparkline
         window.addEventListener('resize', () => {
             renderSparkline();
+            renderCumulativeSparkline();
         });
         
         // Auto-load
