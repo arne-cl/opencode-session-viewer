@@ -114,40 +114,117 @@ def export_session(db_path: Path, session_id: str) -> dict:
     }
 
 
+def _group_by_directory(sessions: list[dict]) -> list[tuple[str, list[dict]]]:
+    """Group sessions by directory, sorted by most recent update."""
+    groups: dict[str, list[dict]] = {}
+    for s in sessions:
+        d = s.get("directory", "Unknown")
+        groups.setdefault(d, []).append(s)
+    for v in groups.values():
+        v.sort(key=lambda s: s.get("time", {}).get("updated", 0), reverse=True)
+    return sorted(groups.items(), key=lambda g: g[1][0].get("time", {}).get("updated", 0), reverse=True)
+
+
+def _paginate(items: list, page: int, page_size: int) -> tuple[list, int, int]:
+    """Return (page_items, start_index, end_index)."""
+    start = page * page_size
+    end = min(start + page_size, len(items))
+    return items[start:end], start, end
+
+
+def _read_choice(prompt: str) -> str | None:
+    try:
+        return input(prompt).strip()
+    except KeyboardInterrupt:
+        return None
+
+
 def interactive_select(sessions: list[dict]) -> str | None:
     """Let user interactively select a session."""
     if not sessions:
         print("No sessions found.")
         return None
 
-    print("\nAvailable OpenCode sessions:\n")
-    print(f"{'#':<4} {'Updated':<18} {'Dir':<40} {'Title':<50}")
-    print("-" * 115)
+    page_size = 30
+    dirs = _group_by_directory(sessions)
 
-    for i, session in enumerate(sessions[:30], 1):  # Show max 30
-        updated = format_timestamp(session.get("time", {}).get("updated"))
-        directory = session.get("directory", "")
-        # Shorten directory for display
-        if len(directory) > 38:
-            directory = "..." + directory[-35:]
-        title = session.get("title", "Untitled")[:48]
-        print(f"{i:<4} {updated:<18} {directory:<40} {title:<50}")
+    # Step 1: select directory
+    page = 0
+    selected_dir = None
+    while selected_dir is None:
+        page_dirs, start, end = _paginate(dirs, page, page_size)
+        print(f"\nDirectories (showing {start + 1}-{end} of {len(dirs)}):\n")
+        print(f"{'#':<6} {'Sessions':>8}  {'Directory'}")
+        print("-" * 80)
+        for i, (directory, dir_sessions) in enumerate(page_dirs, start + 1):
+            display_dir = directory if len(directory) <= 65 else "..." + directory[-62:]
+            print(f"{i:<6} {len(dir_sessions):>8}  {display_dir}")
 
-    print()
-
-    try:
-        choice = input("Enter session number (or 'q' to quit): ").strip()
-        if choice.lower() == "q":
+        print()
+        prompt = "Enter # to select directory"
+        if end < len(dirs):
+            prompt += ", 'n' next"
+        if page > 0:
+            prompt += ", 'p' prev"
+        prompt += ", 'q' quit: "
+        choice = _read_choice(prompt)
+        if choice is None or choice.lower() == "q":
             return None
+        if choice.lower() == "n" and end < len(dirs):
+            page += 1
+            continue
+        if choice.lower() == "p" and page > 0:
+            page -= 1
+            continue
+        try:
+            idx = int(choice) - 1
+            if 0 <= idx < len(dirs):
+                selected_dir = idx
+            else:
+                print("Invalid selection.")
+        except ValueError:
+            print("Invalid input.")
 
-        idx = int(choice) - 1
-        if 0 <= idx < len(sessions):
-            return sessions[idx]["id"]
-        else:
+    directory, dir_sessions = dirs[selected_dir]
+    display_dir = directory if len(directory) <= 65 else "..." + directory[-62:]
+    print(f"\nSessions in {display_dir}:\n")
+
+    # Step 2: select session
+    page = 0
+    while True:
+        page_sessions, start, end = _paginate(dir_sessions, page, page_size)
+        print(f"{'#':<6} {'Updated':<18} {'Title'}")
+        print("-" * 90)
+        for i, session in enumerate(page_sessions, start + 1):
+            updated = format_timestamp(session.get("time", {}).get("updated"))
+            title = session.get("title", "Untitled")[:68]
+            print(f"{i:<6} {updated:<18} {title}")
+
+        print()
+        prompt = "Enter session #"
+        if end < len(dir_sessions):
+            prompt += ", 'n' next"
+        if page > 0:
+            prompt += ", 'p' prev"
+        prompt += ", 'b' back to dirs, 'q' quit: "
+        choice = _read_choice(prompt)
+        if choice is None or choice.lower() == "q":
+            return None
+        if choice.lower() == "b":
+            return interactive_select(sessions)
+        if choice.lower() == "n" and end < len(dir_sessions):
+            page += 1
+            continue
+        if choice.lower() == "p" and page > 0:
+            page -= 1
+            continue
+        try:
+            idx = int(choice) - 1
+            if 0 <= idx < len(dir_sessions):
+                return dir_sessions[idx]["id"]
             print("Invalid selection.")
-            return None
-    except (ValueError, KeyboardInterrupt):
-        return None
+        except ValueError:
+            print("Invalid input.")
 
 
 def main():
