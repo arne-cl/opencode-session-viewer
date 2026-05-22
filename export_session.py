@@ -15,8 +15,11 @@ Or run directly from GitHub:
 """
 
 import json
+import os
 import sqlite3
 import sys
+import tempfile
+import webbrowser
 from pathlib import Path
 from datetime import datetime
 
@@ -227,6 +230,36 @@ def interactive_select(sessions: list[dict]) -> str | None:
             print("Invalid input.")
 
 
+def open_in_browser(output_path: Path) -> None:
+    html_path = Path(__file__).resolve().parent / "index.html"
+    if not html_path.exists():
+        print(f"Warning: index.html not found at {html_path}, skipping browser open.", file=sys.stderr)
+        return
+
+    html = html_path.read_text()
+    data = output_path.read_text()
+
+    autoload = """        // Auto-load
+        fetch('session_data.json')
+            .then(r => r.json())
+            .then(data => loadData(data))
+            .catch(() => {});"""
+    inline = f"        loadData({data});"
+
+    if autoload not in html:
+        print("Warning: could not find auto-load block in index.html, skipping browser open.", file=sys.stderr)
+        return
+
+    standalone = html.replace(autoload, inline)
+
+    fd, tmp_path = tempfile.mkstemp(suffix=".html", prefix="session_viewer_")
+    with os.fdopen(fd, "w") as f:
+        f.write(standalone)
+
+    webbrowser.open("file://" + tmp_path)
+    print(f"Opened in browser (standalone: {tmp_path})")
+
+
 def main():
     import argparse
 
@@ -247,6 +280,9 @@ Examples:
     )
     parser.add_argument(
         "--output", "-o", default="session_data.json", help="Output filename"
+    )
+    parser.add_argument(
+        "--no-open", action="store_true", help="Do not open browser after export"
     )
 
     args = parser.parse_args()
@@ -299,7 +335,11 @@ Examples:
     print(
         f"Exported {data['messageCount']} messages to {output_path} ({size_mb:.1f} MB)"
     )
-    print(f"\nTo view: open index.html and load {output_path}")
+
+    if not args.no_open:
+        open_in_browser(output_path)
+    else:
+        print(f"\nTo view: open index.html and load {output_path}")
 
 
 if __name__ == "__main__":
