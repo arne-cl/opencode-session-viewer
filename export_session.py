@@ -15,42 +15,56 @@ Or run directly from GitHub:
 """
 
 import json
+import sqlite3
 import sys
 from pathlib import Path
 from datetime import datetime
 
 
-def get_storage_path() -> Path:
-    """Get the OpenCode storage path."""
-    return Path.home() / ".local/share/opencode/storage"
+def get_db_path() -> Path:
+    """Get the OpenCode SQLite database path."""
+    return Path.home() / ".local/share/opencode/opencode.db"
 
 
-def load_json(path: Path) -> dict:
-    """Load a JSON file."""
-    with open(path) as f:
-        return json.load(f)
-
-
-def list_sessions(storage_path: Path) -> list[dict]:
-    """List all available sessions with metadata."""
+def list_sessions(db_path: Path) -> list[dict]:
+    """List all available sessions with metadata from SQLite."""
     sessions = []
-    session_base = storage_path / "session"
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
 
-    if not session_base.exists():
-        return sessions
+    cursor.execute(
+        "SELECT id, title, directory, slug, version, "
+        "summary_additions, summary_deletions, summary_files, "
+        "time_created, time_updated, cost, "
+        "tokens_input, tokens_output "
+        "FROM session ORDER BY time_updated DESC"
+    )
 
-    # Check all subdirectories (global and project-specific)
-    for subdir in session_base.iterdir():
-        if subdir.is_dir():
-            for session_file in subdir.glob("*.json"):
-                try:
-                    data = load_json(session_file)
-                    sessions.append(data)
-                except Exception:
-                    continue
+    for row in cursor.fetchall():
+        sessions.append(
+            {
+                "id": row["id"],
+                "title": row["title"],
+                "directory": row["directory"],
+                "slug": row["slug"],
+                "version": row["version"],
+                "summary": {
+                    "additions": row["summary_additions"],
+                    "deletions": row["summary_deletions"],
+                    "files": row["summary_files"],
+                },
+                "time": {
+                    "created": row["time_created"],
+                    "updated": row["time_updated"],
+                },
+                "cost": row["cost"],
+                "tokens_input": row["tokens_input"],
+                "tokens_output": row["tokens_output"],
+            }
+        )
 
-    # Sort by last updated time (most recent first)
-    sessions.sort(key=lambda s: s.get("time", {}).get("updated", 0), reverse=True)
+    conn.close()
     return sessions
 
 
@@ -61,42 +75,36 @@ def format_timestamp(ts: int) -> str:
     return datetime.fromtimestamp(ts / 1000).strftime("%Y-%m-%d %H:%M")
 
 
-def get_message_parts(storage_path: Path, msg_id: str) -> list[dict]:
-    """Load all parts for a message."""
-    part_dir = storage_path / "part" / msg_id
-    if not part_dir.exists():
-        return []
+def export_session(db_path: Path, session_id: str) -> dict:
+    """Export a session to a dictionary from SQLite."""
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
 
-    parts = []
-    for part_file in sorted(part_dir.glob("*.json")):
-        try:
-            parts.append(load_json(part_file))
-        except Exception:
-            continue
-    return parts
-
-
-def export_session(storage_path: Path, session_id: str) -> dict:
-    """Export a session to a dictionary."""
-    # Find the session's message directory
-    message_path = storage_path / "message" / session_id
-
-    if not message_path.exists():
+    cursor.execute("SELECT id FROM session WHERE id = ?", (session_id,))
+    if not cursor.fetchone():
+        conn.close()
         raise ValueError(f"Session not found: {session_id}")
 
-    # Load all messages
-    messages = []
-    for msg_file in message_path.glob("*.json"):
-        try:
-            msg = load_json(msg_file)
-            msg["parts"] = get_message_parts(storage_path, msg["id"])
-            messages.append(msg)
-        except Exception as e:
-            print(f"Warning: Failed to load message {msg_file}: {e}", file=sys.stderr)
-            continue
+    cursor.execute(
+        "SELECT id, data FROM message WHERE session_id = ? ORDER BY time_created",
+        (session_id,),
+    )
 
-    # Sort by creation time
-    messages.sort(key=lambda m: m.get("time", {}).get("created", 0))
+    messages = []
+    for msg_row in cursor.fetchall():
+        msg = json.loads(msg_row["data"])
+        msg["id"] = msg_row["id"]
+        msg["sessionID"] = session_id
+
+        cursor.execute(
+            "SELECT data FROM part WHERE message_id = ? ORDER BY time_created",
+            (msg_row["id"],),
+        )
+        msg["parts"] = [json.loads(p["data"]) for p in cursor.fetchall()]
+        messages.append(msg)
+
+    conn.close()
 
     return {
         "sessionID": session_id,
@@ -166,14 +174,14 @@ Examples:
 
     args = parser.parse_args()
 
-    storage_path = get_storage_path()
+    db_path = get_db_path()
 
-    if not storage_path.exists():
-        print(f"OpenCode storage not found at {storage_path}", file=sys.stderr)
+    if not db_path.exists():
+        print(f"OpenCode database not found at {db_path}", file=sys.stderr)
         sys.exit(1)
 
     # List sessions
-    sessions = list_sessions(storage_path)
+    sessions = list_sessions(db_path)
 
     if args.list:
         if not sessions:
@@ -200,7 +208,7 @@ Examples:
     print(f"Exporting session: {session_id}")
 
     try:
-        data = export_session(storage_path, session_id)
+        data = export_session(db_path, session_id)
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
