@@ -90,6 +90,12 @@ def export_session(db_path: Path, session_id: str) -> dict:
         raise ValueError(f"Session not found: {session_id}")
 
     cursor.execute(
+        "SELECT cost, tokens_input, tokens_output FROM session WHERE id = ?",
+        (session_id,),
+    )
+    session_row = cursor.fetchone()
+
+    cursor.execute(
         "SELECT id, data FROM message WHERE session_id = ? ORDER BY time_created",
         (session_id,),
     )
@@ -109,12 +115,22 @@ def export_session(db_path: Path, session_id: str) -> dict:
 
     conn.close()
 
-    return {
+    result = {
         "sessionID": session_id,
         "exportedAt": datetime.now().isoformat(),
         "messageCount": len(messages),
         "messages": messages,
     }
+
+    if session_row:
+        if session_row["cost"]:
+            result["cost"] = session_row["cost"]
+        if session_row["tokens_input"]:
+            result["tokensInput"] = session_row["tokens_input"]
+        if session_row["tokens_output"]:
+            result["tokensOutput"] = session_row["tokens_output"]
+
+    return result
 
 
 def _group_by_directory(sessions: list[dict]) -> list[tuple[str, list[dict]]]:

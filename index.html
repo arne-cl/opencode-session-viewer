@@ -30,6 +30,8 @@
             --chart-in: #60a5fa;
             --chart-out: #f472b6;
             --chart-cache: #34d399;
+            --chart-cache-write: #fbbf24;
+            --chart-reasoning: #a78bfa;
         }
         
         .dark {
@@ -439,7 +441,7 @@
         .token-label {
             font-size: 11px;
             color: var(--text-secondary);
-            width: 45px;
+            width: 75px;
         }
         
         .token-bar-container {
@@ -466,6 +468,14 @@
         
         .token-bar.cache {
             background: var(--chart-cache);
+        }
+        
+        .token-bar.cache-write {
+            background: var(--chart-cache-write);
+        }
+        
+        .token-bar.reasoning {
+            background: var(--chart-reasoning);
         }
         
         .token-value {
@@ -546,6 +556,49 @@
             text-align: center;
         }
         
+        /* Session totals */
+        .session-totals {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        
+        .session-total-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 11px;
+        }
+        
+        .session-total-label {
+            color: var(--text-secondary);
+        }
+        
+        .session-total-value {
+            font-family: "SFMono-Regular", Menlo, monospace;
+            color: var(--text-primary);
+            font-size: 11px;
+        }
+        
+        .session-total-value.exact {
+            color: var(--accent-green);
+        }
+        
+        .session-total-value.approx {
+            color: var(--accent-orange);
+        }
+        
+        .session-total-value.cost-value {
+            font-weight: 600;
+            color: var(--accent-green);
+        }
+        
+        .session-total-divider {
+            border: none;
+            border-top: 1px solid var(--border-color);
+            margin: 4px 0;
+        }
+        
         /* Legend */
         .legend {
             display: flex;
@@ -571,6 +624,8 @@
         .legend-dot.input { background: var(--chart-in); }
         .legend-dot.output { background: var(--chart-out); }
         .legend-dot.cache { background: var(--chart-cache); }
+        .legend-dot.cache-write { background: var(--chart-cache-write); }
+        .legend-dot.reasoning { background: var(--chart-reasoning); }
         
         /* Loading state */
         .loading-state {
@@ -749,6 +804,10 @@
         </div>
         <div class="viz-panel" id="vizPanel">
             <div class="viz-section">
+                <div class="viz-title">Session Totals</div>
+                <div class="session-totals" id="sessionTotals"></div>
+            </div>
+            <div class="viz-section">
                 <div class="viz-title">Current Message Tokens</div>
                 <div class="current-tokens">
                     <div class="token-row">
@@ -766,17 +825,33 @@
                         <span class="token-value" id="outputValue">0</span>
                     </div>
                     <div class="token-row">
-                        <span class="token-label">Cache</span>
+                        <span class="token-label">Cache Read</span>
                         <div class="token-bar-container">
                             <div class="token-bar cache" id="cacheBar" style="width: 0%"></div>
                         </div>
                         <span class="token-value" id="cacheValue">0</span>
                     </div>
+                    <div class="token-row">
+                        <span class="token-label">Cache Write</span>
+                        <div class="token-bar-container">
+                            <div class="token-bar cache-write" id="cacheWriteBar" style="width: 0%"></div>
+                        </div>
+                        <span class="token-value" id="cacheWriteValue">0</span>
+                    </div>
+                    <div class="token-row">
+                        <span class="token-label">Reasoning</span>
+                        <div class="token-bar-container">
+                            <div class="token-bar reasoning" id="reasoningBar" style="width: 0%"></div>
+                        </div>
+                        <span class="token-value" id="reasoningValue">0</span>
+                    </div>
                 </div>
                 <div class="legend">
                     <div class="legend-item"><div class="legend-dot input"></div> Input</div>
                     <div class="legend-item"><div class="legend-dot output"></div> Output</div>
-                    <div class="legend-item"><div class="legend-dot cache"></div> Cache</div>
+                    <div class="legend-item"><div class="legend-dot cache"></div> Cache R</div>
+                    <div class="legend-item"><div class="legend-dot cache-write"></div> Cache W</div>
+                    <div class="legend-item"><div class="legend-dot reasoning"></div> Reason</div>
                 </div>
             </div>
             
@@ -851,15 +926,21 @@
         
         // Extract token data from message
         function getMessageTokens(msg) {
-            let input = 0, output = 0, cache = 0;
+            let input = 0, output = 0, cache = 0, cacheWrite = 0, reasoning = 0, total = 0, cost = 0;
             (msg.parts || []).forEach(p => {
                 if (p.type === 'step-finish' && p.tokens) {
                     input += p.tokens.input || 0;
                     output += p.tokens.output || 0;
                     cache += p.tokens.cache?.read || 0;
+                    cacheWrite += p.tokens.cache?.write || 0;
+                    reasoning += p.tokens.reasoning || 0;
+                    total += p.tokens.total || 0;
+                }
+                if (p.type === 'step-finish' && p.cost) {
+                    cost += p.cost;
                 }
             });
-            return { input, output, cache };
+            return { input, output, cache, cacheWrite, reasoning, total, cost };
         }
         
         // Build token data array
@@ -869,8 +950,73 @@
             maxTokens = {
                 input: Math.max(1, ...tokenData.map(t => t.input)),
                 output: Math.max(1, ...tokenData.map(t => t.output)),
-                cache: Math.max(1, ...tokenData.map(t => t.cache))
+                cache: Math.max(1, ...tokenData.map(t => t.cache)),
+                cacheWrite: Math.max(1, ...tokenData.map(t => t.cacheWrite)),
+                reasoning: Math.max(1, ...tokenData.map(t => t.reasoning)),
             };
+        }
+        
+        function makeTotalRow(label, value, color) {
+            return `<div class="session-total-row"><span class="session-total-label" style="color:${color}">${label}</span><span class="session-total-value">${value.toLocaleString()}</span></div>`;
+        }
+        
+        function computeSessionTotals() {
+            if (!SESSION_DATA || tokenData.length === 0) return;
+            
+            let totalInput = 0, totalOutput = 0, totalReasoning = 0;
+            let totalCacheRead = 0, totalCacheWrite = 0;
+            let totalReported = 0, stepCostSum = 0;
+            let hasReportedTotal = false;
+            
+            SESSION_DATA.messages.forEach(m => {
+                (m.parts || []).forEach(p => {
+                    if (p.type === 'step-finish' && p.tokens) {
+                        totalInput += p.tokens.input || 0;
+                        totalOutput += p.tokens.output || 0;
+                        totalReasoning += p.tokens.reasoning || 0;
+                        totalCacheRead += p.tokens.cache?.read || 0;
+                        totalCacheWrite += p.tokens.cache?.write || 0;
+                        if (p.tokens.total) {
+                            totalReported += p.tokens.total;
+                            hasReportedTotal = true;
+                        }
+                    }
+                    if (p.type === 'step-finish' && p.cost) {
+                        stepCostSum += p.cost;
+                    }
+                });
+            });
+            
+            const computedTotal = totalInput + totalOutput + totalReasoning + totalCacheRead + totalCacheWrite;
+            const sessionCost = SESSION_DATA.cost || stepCostSum;
+            
+            const totalsEl = document.getElementById('sessionTotals');
+            if (!totalsEl) return;
+            
+            let html = '';
+            html += makeTotalRow('Input', totalInput, 'var(--chart-in)');
+            html += makeTotalRow('Output', totalOutput, 'var(--chart-out)');
+            html += makeTotalRow('Reasoning', totalReasoning, 'var(--chart-reasoning)');
+            html += makeTotalRow('Cache Read', totalCacheRead, 'var(--chart-cache)');
+            html += makeTotalRow('Cache Write', totalCacheWrite, 'var(--chart-cache-write)');
+            html += '<hr class="session-total-divider">';
+            
+            if (hasReportedTotal) {
+                const diff = Math.abs(computedTotal - totalReported);
+                const pct = computedTotal > 0 ? diff / computedTotal : 0;
+                const match = pct < 0.01;
+                const cls = match ? 'exact' : 'approx';
+                const label = match ? 'Total (exact)' : 'Total (~approx)';
+                html += `<div class="session-total-row"><span class="session-total-label">${label}</span><span class="session-total-value ${cls}">${computedTotal.toLocaleString()}</span></div>`;
+            } else {
+                html += `<div class="session-total-row"><span class="session-total-label">Total</span><span class="session-total-value">${computedTotal.toLocaleString()}</span></div>`;
+            }
+            
+            if (sessionCost > 0) {
+                html += `<div class="session-total-row"><span class="session-total-label">Cost</span><span class="session-total-value cost-value">$${sessionCost.toFixed(4)}</span></div>`;
+            }
+            
+            totalsEl.innerHTML = html;
         }
         
         // Update visualization for current message
@@ -878,17 +1024,21 @@
             if (!SESSION_DATA || tokenData.length === 0) return;
             
             currentMessageIndex = index;
-            const t = tokenData[index] || { input: 0, output: 0, cache: 0 };
+            const t = tokenData[index] || { input: 0, output: 0, cache: 0, cacheWrite: 0, reasoning: 0 };
             
             // Update bars
             document.getElementById('inputBar').style.width = (t.input / maxTokens.input * 100) + '%';
             document.getElementById('outputBar').style.width = (t.output / maxTokens.output * 100) + '%';
             document.getElementById('cacheBar').style.width = (t.cache / maxTokens.cache * 100) + '%';
+            document.getElementById('cacheWriteBar').style.width = (t.cacheWrite / maxTokens.cacheWrite * 100) + '%';
+            document.getElementById('reasoningBar').style.width = (t.reasoning / maxTokens.reasoning * 100) + '%';
             
             // Update values
             document.getElementById('inputValue').textContent = t.input.toLocaleString();
             document.getElementById('outputValue').textContent = t.output.toLocaleString();
             document.getElementById('cacheValue').textContent = t.cache.toLocaleString();
+            document.getElementById('cacheWriteValue').textContent = t.cacheWrite.toLocaleString();
+            document.getElementById('reasoningValue').textContent = t.reasoning.toLocaleString();
             
             // Update progress
             const progress = ((index + 1) / SESSION_DATA.messages.length * 100);
@@ -1068,12 +1218,17 @@
             
             if (part.type === 'step-finish') {
                 const t = part.tokens || {};
+                const cost = part.cost;
                 return `
                     <div class="part part-step">
                         ✓ Step finished (${part.reason || ''})
                         ${t.input ? `<span class="token-badge">In: ${t.input.toLocaleString()}</span>` : ''}
                         ${t.output ? `<span class="token-badge">Out: ${t.output.toLocaleString()}</span>` : ''}
-                        ${t.cache?.read ? `<span class="token-badge">Cache: ${t.cache.read.toLocaleString()}</span>` : ''}
+                        ${t.reasoning ? `<span class="token-badge">Reason: ${t.reasoning.toLocaleString()}</span>` : ''}
+                        ${t.cache?.read ? `<span class="token-badge">Cache R: ${t.cache.read.toLocaleString()}</span>` : ''}
+                        ${t.cache?.write ? `<span class="token-badge">Cache W: ${t.cache.write.toLocaleString()}</span>` : ''}
+                        ${t.total ? `<span class="token-badge">Total: ${t.total.toLocaleString()}</span>` : ''}
+                        ${cost ? `<span class="token-badge">$${cost.toFixed(4)}</span>` : ''}
                     </div>
                 `;
             }
@@ -1112,10 +1267,18 @@
             const total = SESSION_DATA.messages.length;
             const user = SESSION_DATA.messages.filter(m => m.role === 'user').length;
             const asst = SESSION_DATA.messages.filter(m => m.role === 'assistant').length;
+            let stepCostSum = 0;
+            SESSION_DATA.messages.forEach(m => {
+                (m.parts || []).forEach(p => {
+                    if (p.type === 'step-finish' && p.cost) stepCostSum += p.cost;
+                });
+            });
+            const sessionCost = SESSION_DATA.cost || stepCostSum;
             document.getElementById('stats').innerHTML = `
                 <span>${total} total</span>
                 <span>${user} user</span>
                 <span>${asst} assistant</span>
+                ${sessionCost > 0 ? `<span>$${sessionCost.toFixed(4)}</span>` : ''}
             `;
         }
         
@@ -1124,6 +1287,7 @@
             SESSION_DATA = data;
             document.getElementById('loadingState')?.remove();
             buildTokenData();
+            computeSessionTotals();
             updateStats();
             renderSidebar();
             renderTimeline();
